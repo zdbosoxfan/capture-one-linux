@@ -1,0 +1,124 @@
+Subject: [BACKPORT] win32u/winex11: Preserve ULW and non-ULW GL surface presentation
+Original-author: Paul Gofman <pgofman@codeweavers.com>
+
+Combined backport of these two published ValveSoftware/wine commits:
+https://github.com/ValveSoftware/wine/commit/1dc8060af449d69cc4e8240732019224aab290b7
+https://github.com/ValveSoftware/wine/commit/d8a27b4712eaeb54f0a69e6dc98d39055a811ce2
+
+Base: Fedora wine-11.0-3.fc44.src.rpm, with its packaged wine-staging
+selection (staging/patchinstall.py DESTDIR=<source> --all -W server-Stored_ACLs).
+SRPM SHA256: c4c777b791171cdfb34cefd787c1dba4a78791ce4dddfff0e78574e442ef4045
+Per-file input/output SHA256 values: README.md build instructions
+
+Context adaptation: Wine 11.0 has no Proton fullscreen/offscreen preamble.
+Initialize needs_offscreen to FALSE before the exact authored alpha-mask
+block, retaining Wine 11.0's original checks below it. Other changes are
+both published commits combined. No one-line bug60173 condition, MR10915,
+local diagnostic instrumentation, or error-suppression change is included.
+Requires matched win32u.so and winex11.so; preserves PE/syscall/server ABI.
+
+diff --git a/dlls/win32u/dce.c b/dlls/win32u/dce.c
+--- a/dlls/win32u/dce.c
++++ b/dlls/win32u/dce.c
+@@ -571,6 +571,20 @@
+         surface->funcs->destroy( surface );
+         if (surface != &dummy_surface) free( surface );
+     }
++}
++
++W32KAPI struct window_surface *window_surface_get( HWND hwnd )
++{
++    struct window_surface *surface = NULL;
++    WND *win = get_win_ptr( hwnd );
++
++    if (win && win != WND_DESKTOP && win != WND_OTHER_PROCESS)
++    {
++        if ((surface = win->surface))
++            window_surface_add_ref( surface );
++        release_win_ptr( win );
++    }
++    return surface;
+ }
+ 
+ W32KAPI void window_surface_lock( struct window_surface *surface )
+diff --git a/dlls/win32u/window.c b/dlls/win32u/window.c
+--- a/dlls/win32u/window.c
++++ b/dlls/win32u/window.c
+@@ -2227,7 +2227,7 @@
+         }
+         if (new_surface) req->paint_flags |= SET_WINPOS_PAINT_SURFACE;
+         if (is_layered) req->paint_flags |= SET_WINPOS_LAYERED_WINDOW;
+-        if (win->clip_clients) req->paint_flags |= SET_WINPOS_PIXEL_FORMAT;
++        else if (win->clip_clients) req->paint_flags |= SET_WINPOS_PIXEL_FORMAT;
+ 
+         if ((ret = !wine_server_call( req )))
+         {
+diff --git a/dlls/winex11.drv/init.c b/dlls/winex11.drv/init.c
+--- a/dlls/winex11.drv/init.c
++++ b/dlls/winex11.drv/init.c
+@@ -228,6 +228,18 @@
+ 
+ BOOL needs_offscreen_rendering( HWND hwnd )
+ {
++    struct window_surface *surface;
++    BOOL needs_offscreen = FALSE;
++
++    if (!needs_offscreen && (surface = window_surface_get( hwnd )))
++    {
++        TRACE("hwnd %p, surface %p, surface->alpha_mask %#x.\n", hwnd, surface, surface->alpha_mask);
++        /* 3d drawing to ULW window never gets onscreen directly, only though UpdateLayeredWindow(). */
++        needs_offscreen = !!surface->alpha_mask;
++        window_surface_release( surface );
++    }
++    if (needs_offscreen) return needs_offscreen;
++
+     if (NtUserGetDpiForWindow( hwnd ) != NtUserGetWinMonitorDpi( hwnd, MDT_RAW_DPI )) return TRUE; /* needs DPI scaling */
+     if (NtUserGetAncestor( hwnd, GA_PARENT ) != NtUserGetDesktopWindow()) return TRUE; /* child window, needs compositing */
+     if (NtUserGetWindowRelative( hwnd, GW_CHILD )) return needs_client_window_clipping( hwnd ); /* window has children, needs compositing */
+@@ -419,6 +431,7 @@
+ {
+     struct x11drv_client_surface *surface = impl_from_client_surface( client );
+     HWND hwnd = client->hwnd, toplevel = NtUserGetAncestor( hwnd, GA_ROOT );
++    struct window_surface *win_surface;
+     struct x11drv_win_data *data;
+     RECT rect_dst, rect;
+     Drawable window;
+@@ -430,6 +443,27 @@
+     client_surface_update_offscreen( hwnd, surface );
+ 
+     if (!hdc) return;
++
++    if (hwnd && (win_surface = window_surface_get( hwnd )))
++    {
++        TRACE( "surface %p, alpha_mask %#x.\n", win_surface, win_surface->alpha_mask );
++        if (win_surface->alpha_mask)
++        {
++            /* GL drawing to ULW window never gets onscreen directly, only though UpdateLayeredWindow(). */
++            window_surface_release( win_surface );
++            return;
++        }
++
++        TRACE( "Surface is present.\n" );
++        region = get_dc_monitor_region( hwnd, hdc );
++        if (region) NtGdiExtSelectClipRgn( hdc, region, RGN_COPY );
++        NtGdiStretchBlt( hdc, 0, 0, surface->rect.right - surface->rect.left, surface->rect.bottom - surface->rect.top,
++                         surface->hdc_src, 0, 0, surface->rect.right, surface->rect.bottom, SRCCOPY, 0 );
++        if (region) NtGdiDeleteObjectApp( region );
++        window_surface_release( win_surface );
++        return;
++    }
++
+     window = X11DRV_get_whole_window( toplevel );
+ 
+     if (NtUserGetPresentRect( toplevel, &rect_dst, -1 /* raw dpi */ ))
+diff --git a/include/wine/gdi_driver.h b/include/wine/gdi_driver.h
+--- a/include/wine/gdi_driver.h
++++ b/include/wine/gdi_driver.h
+@@ -326,6 +326,7 @@
+ W32KAPI void window_surface_set_clip( struct window_surface *surface, HRGN clip_region );
+ W32KAPI void window_surface_set_shape( struct window_surface *surface, HRGN shape_region );
+ W32KAPI void window_surface_set_layered( struct window_surface *surface, COLORREF color_key, UINT alpha_bits, UINT alpha_mask );
++W32KAPI struct window_surface *window_surface_get( HWND hwnd );
+ 
+ /* display manager interface, used to initialize display device registry data */
+ 
