@@ -2,9 +2,9 @@
 
 **Disclosure:** This setup, the custom color-profile proxy and the setup scripts were vibe coded with AI assistance. I make no claims about the code's efficacy, correctness, quality, or whether this is the proper way to solve the problem. These are reports from my own machine, not claims of reliability; the current limitations and provisional workarounds are described below.
 
-**Experimental, one-workstation result — updated 2026-10-05.** RAW editing, JPEG export and menus have worked in the user's tests. Selection can become one click behind after preview generation; a new catalog helped temporarily but did not fix it. The latest software-WPF comparison improved behavior according to the user, but sustained stability and performance remain unverified. Resizing still behaves oddly and blinks; maximize/monitor behavior and sustained stability are not established. These consolidated installation steps **have not been executed end to end in a clean prefix or on a second machine**. Capture One does not officially support this Linux configuration.
+**Experimental, one-workstation result — updated 2026-10-05.** RAW editing, JPEG export and menus have worked in the user's tests. Hardware-WPF selection became one click behind after preview generation; a new catalog helped only temporarily. With the current provisional software-WPF setting, the latest user test found thumbnail selection working, but sliders remain latent/slow. Resizing has also behaved oddly and blinked; maximize/monitor behavior and sustained stability are not established. These consolidated installation steps **have not been executed end to end in a clean prefix or on a second machine**. Capture One does not officially support this Linux configuration.
 
-**Other known limits:** OpenCL photo processing initializes, but the separate DirectML AI acceleration currently fails; AI feature correctness and performance are not fully validated. The optional Open With integration is disabled. Tethering and monitor color accuracy have not been tested.
+**AI status and other limits:** OpenCL photo processing initializes. With the official vkd3d-proton 3.0.1 D3D12 pair, Capture One's DirectML model benchmark passed and startup selected GPU device 0 for AI acceleration. Separate FP32/FP16 ONNX tests also passed with CPU fallback disabled. An AI Subject/Background mask worked in the user test; other AI workflows and sustained AI performance remain unvalidated. The optional Open With integration is disabled. Tethering and monitor color accuracy have not been tested.
 
 This minimal source archive contains eight files: this guide, one Wine patch, the color proxy's C/DEF files, two preparation helpers and two licenses. No binaries, application installers, fonts, accounts or user data are included. Use your own licensed Capture One installer and fonts. The procedure compiles two matching Wine modules and a compatibility DLL, installs the app, applies every setting, then launches it once.
 
@@ -19,6 +19,7 @@ Use this matching package baseline. Another Wine or application version requires
 | GPU / driver | NVIDIA RTX 5090; RPM Fusion 615.71.09 |
 | Wine | Fedora Wine 11.0-3.fc44 staging; matching wine-core/cms and x64 wine-opencl |
 | Packaged Direct3D | DXVK 2.7.1-6.fc44; its D3D9 is bypassed for the editor/helper with matching WineD3D |
+| DirectML / D3D12 | Official vkd3d-proton 3.0.1 x64 D3D12 pair, app-local; existing DXVK DXGI retained |
 | Application | Official CaptureOne.Win.16.6.6.3111.exe, licensed for that version |
 | .NET | Windows Desktop Runtime x64 8.0.31 |
 | WebView2 | x64 runtime 154.0.4258.53 |
@@ -40,6 +41,7 @@ Collect these before starting. The source ZIP contains none of these installers 
 | Capture One installer | Your official `CaptureOne.Win.16.6.6.3111.exe` and a license covering that version |
 | .NET Desktop Runtime | [Microsoft x64 8.0.31 installer](https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/8.0.31/windowsdesktop-runtime-8.0.31-win-x64.exe) |
 | WebView2 runtime | [Microsoft x64 Evergreen Standalone](https://go.microsoft.com/fwlink/p/?LinkId=2124701); tested runtime 154.0.4258.53 |
+| D3D12 compatibility | [Official vkd3d-proton 3.0.1 archive](https://github.com/HansKristian-Work/vkd3d-proton/releases/download/v3.0.1/vkd3d-proton-3.0.1.tar.zst); save as `vkd3d-proton-3.0.1.tar.zst` in Downloads |
 | UI fonts | Eight files from a source you are licensed to use, listed in the preflight below |
 | Wine source RPM | [Fedora wine-11.0-3.fc44.src.rpm](https://ftp-osl.osuosl.org/pub/fedora/linux/releases/44/Everything/source/tree/Packages/w/wine-11.0-3.fc44.src.rpm); save as `wine-11.0-3.fc44.src.rpm` in Downloads; verify in Step 2 |
 
@@ -56,7 +58,7 @@ The versioned .NET installer SHA-512 was verified against [Microsoft metadata](h
 Make these development packages available in a Fedora 44 build environment, letting its package manager resolve dependencies such as HarfBuzz, PNG, zlib and Brotli:
 
 ```text
-gcc make autoconf bison flex perl python3 patch diffutils tar gzip xz
+gcc make autoconf bison flex perl python3 patch diffutils tar gzip xz zstd
 rpm rpm-build cpio pkgconf-pkg-config mingw64-gcc mingw64-headers mingw64-crt
 libX11-devel libXcomposite-devel libXcursor-devel libXrender-devel
 libXrandr-devel libXinerama-devel libXi-devel libXext-devel libXfixes-devel
@@ -95,7 +97,7 @@ for C1_NEW_PATH in "$C1_BUILD" "$WINEPREFIX" "$C1_RUNNER"; do
 done
 for C1_FILE in CaptureOne.Win.16.6.6.3111.exe \
   windowsdesktop-runtime-8.0.31-win-x64.exe MicrosoftEdgeWebView2RuntimeInstallerX64.exe \
-  wine-11.0-3.fc44.src.rpm; do
+  wine-11.0-3.fc44.src.rpm vkd3d-proton-3.0.1.tar.zst; do
   test -f "$C1_DOWNLOADS/$C1_FILE"
 done
 for C1_FONT in segoeui.ttf segoeuib.ttf segoeuii.ttf segoeuiz.ttf \
@@ -307,6 +309,33 @@ any installed file:
 python3 "$C1_KIT/prepare-private-wine-dlls.py" "$C1_RUNNER" "$C1_FILES"
 ```
 
+### Prepare the official D3D12 pair for DirectML
+
+The tested DXVK DXGI and Wine builtin D3D12 combination failed to initialize DirectML. The official vkd3d-proton pair corrected device initialization, passed isolated FP32/FP16 GPU computation, and passed Capture One's startup model benchmark. [Upstream documents using both native D3D12 DLLs with DXVK DXGI](https://github.com/HansKristian-Work/vkd3d-proton/blob/v3.0.1/README.md#using-vkd3d-proton). This step retains the existing DXGI, WineD3D9, software WPF and photo OpenCL settings.
+
+Verify the exact [3.0.1 release](https://github.com/HansKristian-Work/vkd3d-proton/releases/tag/v3.0.1), then extract only its two x64 DLLs into the build output. The archive digest was checked against the release asset's published SHA-256. These binaries are downloaded separately and are not included in this source kit. No upstream installation script is run.
+
+```bash
+(cd "$C1_DOWNLOADS" && sha256sum --check <<'C1_VKD3D_ARCHIVE'
+3cf2315522af5e43605ef6d3c41dad91387040bf97199934f3f7ab76caaa2f0c  vkd3d-proton-3.0.1.tar.zst
+C1_VKD3D_ARCHIVE
+)
+for C1_DLL in d3d12.dll d3d12core.dll; do
+  test ! -e "$C1_FILES/$C1_DLL"
+  test ! -L "$C1_FILES/$C1_DLL"
+done
+tar --zstd --extract --file "$C1_DOWNLOADS/vkd3d-proton-3.0.1.tar.zst" \
+  --directory "$C1_FILES" --strip-components=2 \
+  --no-same-owner --no-same-permissions --keep-old-files -- \
+  vkd3d-proton-3.0.1/x64/d3d12.dll \
+  vkd3d-proton-3.0.1/x64/d3d12core.dll
+(cd "$C1_FILES" && sha256sum --check <<'C1_VKD3D_FILES'
+aed51497c0efa76c9ffc30386ff0957197824cd4734ce64b4e962d3551fba43c  d3d12.dll
+68b8bc7b32f9b1b1b0526e9e2e769731dd8da9af0f2b40f76012385b9d5721df  d3d12core.dll
+C1_VKD3D_FILES
+)
+```
+
 The build is complete. No application prefix or launch was needed. Clear compiler flags and select matching stock Fedora Wine for installation/configuration:
 
 ```bash
@@ -318,7 +347,7 @@ export WINEARCH=win64
 export WINEDEBUG=-all
 export WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--disable-gpu
 export WINE_D3D_CONFIG=renderer=gl
-for C1_FILE in mscms.dll mscms_wine.dll d3d9.dll; do
+for C1_FILE in mscms.dll mscms_wine.dll d3d9.dll d3d12.dll d3d12core.dll; do
   test -f "$C1_FILES/$C1_FILE"
 done
 test -x "$C1_RUNNER/lib64/wine-wow64/wine/x86_64-unix/wine"
@@ -386,15 +415,16 @@ Repeat the WebView2 directory check above after installing Capture One, before c
 
 ### Application-local compatibility DLLs
 
-Copy the color-profile proxy, its matching Wine implementation, and matching WineD3D9 together. The guard refuses replacements:
+Copy the color-profile proxy, its matching Wine implementation, matching WineD3D9, and the verified official D3D12 pair together. The guard refuses replacements:
 
 ```bash
-for C1_DLL in mscms.dll mscms_wine.dll d3d9.dll; do
+for C1_DLL in mscms.dll mscms_wine.dll d3d9.dll d3d12.dll d3d12core.dll; do
   test ! -e "$C1_APP/$C1_DLL"
   test ! -L "$C1_APP/$C1_DLL"
 done
 cp "$C1_FILES/mscms.dll" "$C1_FILES/mscms_wine.dll" \
-  "$C1_FILES/d3d9.dll" "$C1_APP/"
+  "$C1_FILES/d3d9.dll" "$C1_FILES/d3d12.dll" \
+  "$C1_FILES/d3d12core.dll" "$C1_APP/"
 ```
 
 ### Fonts
@@ -440,13 +470,13 @@ PY
 
 ### Prefix and application settings
 
-Apply the current local configuration together: Windows 11 for the prefix, Windows 8 only for the embedded browser, editor-scoped color overrides, WineD3D9 for both editor and helper, software WPF, OpenCL photo processing and the selected DPI.
+Apply the current local configuration together: Windows 11 for the prefix, Windows 8 only for the embedded browser, editor-scoped color and D3D12 overrides, WineD3D9 for both editor and helper, software WPF, OpenCL photo processing and the selected DPI. The D3D12 overrides affect only `CaptureOne.exe`; the existing DXGI configuration is retained.
 
 ```bash
 /usr/bin/wine winecfg -v win11
 /usr/bin/wine reg add 'HKCU\Software\Wine\AppDefaults\msedgewebview2.exe' \
   /v Version /t REG_SZ /d win8 /f
-for C1_DLL in mscms mscms_wine; do
+for C1_DLL in mscms mscms_wine d3d12 d3d12core; do
   /usr/bin/wine reg add 'HKCU\Software\Wine\AppDefaults\CaptureOne.exe\DllOverrides' \
     /v "$C1_DLL" /t REG_SZ /d native /f
 done
@@ -462,7 +492,7 @@ done
   /v LogPixels /t REG_DWORD /d "$C1_DPI" /f
 ```
 
-The WPF software-rendering setting is a provisional workaround for selection becoming one click late after previews finish. The user reports improvement with the same catalog and photo OpenCL still active. It may reduce interface performance, and it is not a confirmed universal fix. [Microsoft documents this diagnostic](https://learn.microsoft.com/en-us/dotnet/desktop/wpf/graphics-multimedia/graphics-rendering-registry-settings). To undo this comparison later, close Capture One and restore only `DisableHWAcceleration` to its prior DWORD value (0 in the tested setup).
+The WPF software-rendering setting is a provisional workaround for selection becoming one click late after previews finish. The latest user test found thumbnail selection working with photo OpenCL still active, but sliders feel slow/latent. This is not a confirmed universal fix. [Microsoft documents this diagnostic](https://learn.microsoft.com/en-us/dotnet/desktop/wpf/graphics-multimedia/graphics-rendering-registry-settings). To undo this comparison later, close Capture One and restore only `DisableHWAcceleration` to its prior DWORD value (0 in the tested setup).
 
 ### Disable the failing optional Open With integration
 
@@ -480,7 +510,7 @@ mv "$C1_APP/Plugins/OpenWith/manifest.xml" \
 Check the installed DLLs match the prepared files:
 
 ```bash
-for C1_DLL in mscms.dll mscms_wine.dll d3d9.dll; do
+for C1_DLL in mscms.dll mscms_wine.dll d3d9.dll d3d12.dll d3d12core.dll; do
   cmp "$C1_FILES/$C1_DLL" "$C1_APP/$C1_DLL"
 done
 ```
@@ -631,7 +661,9 @@ Use a new test session and copied photos. Check these in one pass:
 | JPEG and supported Sony A1 ARW | Import and view both; move Exposure and inspect live updates |
 | JPEG export | Export the edited RAW and inspect the resulting JPEG |
 | Hardware Acceleration preferences | Select/confirm Auto and let kernel setup finish; OpenCL is separate from Windows AI features |
-| Selection after previews finish | Recheck Library folder clicks, thumbnails, arrow keys and Select Next/Previous. Software WPF provisionally improves the one-click delay; retest after previews finish and during longer use. A new catalog was only a temporary improvement |
+| AI acceleration and interactive features | DirectML startup/model benchmark passed and selected device 0; an AI Subject/Background mask worked in the user test. Test other AI tools and inspect their results; broader workflows remain unvalidated |
+| Selection after previews finish | Thumbnail selection passed the latest software-WPF test. Recheck Library folder clicks, arrows and Select Next/Previous after previews finish and during longer use; a new catalog alone was only a temporary improvement |
+| Slider responsiveness | Sliders remain slow/latent in the latest software-WPF test; performance is unresolved |
 | Window behavior | Test resize, maximize/restore and monitor moves; resize blinking is a known unresolved issue |
 | Longer editing | Check stability; a successful launch is not sufficient validation |
 
@@ -646,6 +678,8 @@ This procedure creates a separate prefix and private Wine runner; it does not re
 For an existing installation, preserve its original launcher, prefix settings and files before adapting this recipe. Restore the prior launcher/runner or restore **both** saved Unix modules together; never pair patched X11 with stock win32u. Restore only changed DLL overrides and newly added app-local DLLs/fonts from their backups. Rename `manifest.xml.disabled-for-wine` back only if the original name is free. Prefixes may hold licenses, accounts, catalogs and later edits: keep them private and do not overwrite current work with an old snapshot.
 
 The handler originals are in the printed `$C1_BUILD/association-backups-*` directory. Restore only those corresponding desktop entries if rolling back launcher routing; keep them consistent with the runner you retain. Do not replace unrelated Wine handlers or change system MIME defaults.
+
+To roll back only the D3D12 addition, close every app in this prefix, move the two newly added files `$C1_APP/d3d12.dll` and `$C1_APP/d3d12core.dll` out of the application directory, and remove only the `d3d12` and `d3d12core` values from `HKCU\Software\Wine\AppDefaults\CaptureOne.exe\DllOverrides` using the same private runner. For an adapted existing installation, restore its recorded prior values instead. Leave DXGI, D3D9, WPF, OpenCL and the color overrides unchanged. The prior DirectML initialization failure may return.
 
 ## Attribution and licenses
 
