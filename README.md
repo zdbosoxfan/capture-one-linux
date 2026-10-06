@@ -4,6 +4,8 @@
 
 **Experimental, one-workstation result — updated 2026-10-05.** RAW editing, JPEG export and menus have worked in the user's tests. Selection can become one click behind after preview generation; a new catalog helped temporarily but did not fix it. The latest software-WPF comparison improved behavior according to the user, but sustained stability and performance remain unverified. Resizing still behaves oddly and blinks; maximize/monitor behavior and sustained stability are not established. These consolidated installation steps **have not been executed end to end in a clean prefix or on a second machine**. Capture One does not officially support this Linux configuration.
 
+**Other known limits:** OpenCL photo processing initializes, but the separate DirectML AI acceleration currently fails; AI feature correctness and performance are not fully validated. The optional Open With integration is disabled. Tethering and monitor color accuracy have not been tested.
+
 This minimal source archive contains eight files: this guide, one Wine patch, the color proxy's C/DEF files, two preparation helpers and two licenses. No binaries, application installers, fonts, accounts or user data are included. Use your own licensed Capture One installer and fonts. The procedure compiles two matching Wine modules and a compatibility DLL, installs the app, applies every setting, then launches it once.
 
 ## 1. Check the host and gather all inputs
