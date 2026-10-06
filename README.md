@@ -2,7 +2,7 @@
 
 **Disclosure:** This setup, the custom color-profile proxy and the setup scripts were vibe coded with AI assistance. I make no claims about the code's efficacy, correctness, quality, or whether this is the proper way to solve the problem. These are reports from my own machine, not claims of reliability; the current limitations and provisional workarounds are described below.
 
-**Experimental, one-workstation result — updated 2026-10-06.** RAW editing, JPEG export and menus have worked in the user's tests. The current configuration combines hardware WPF rendering with Microsoft's full-frame rendering switch; the user confirmed that sliders and image selection now work correctly. Opening tool sections redraws immediately, but collapsing them can wait until the mouse moves elsewhere. Resizing previously behaved oddly and blinked; resize, maximize/monitor behavior and sustained stability have not been validated with the current setting. These consolidated installation steps **have not been executed end to end in a clean prefix or on a second machine**. Capture One does not officially support this Linux configuration.
+**Experimental, one-workstation result — updated 2026-10-06.** RAW editing, JPEG export and menus have worked in the user's tests. The current configuration combines hardware WPF rendering, Microsoft's full-frame rendering switch and the NVIDIA EGL presentation wait described below. The user confirmed that tool drawers now close immediately and sliders and image selection work correctly. Resizing previously behaved oddly and blinked; resize, maximize/monitor behavior and sustained stability have not been validated with this latest configuration. A separate standalone WPF test still showed stale rendering, so this is not a general WPF fix. These consolidated installation steps **have not been executed end to end in a clean prefix or on a second machine**. Capture One does not officially support this Linux configuration.
 
 **AI status and other limits:** OpenCL photo processing initializes. With the official vkd3d-proton 3.0.1 D3D12 pair, Capture One's DirectML model benchmark passed and startup selected GPU device 0 for AI acceleration. Separate FP32/FP16 ONNX tests also passed with CPU fallback disabled. An AI Subject/Background mask worked in the user test; other AI workflows and sustained AI performance remain unvalidated. The optional Open With integration is disabled. Tethering and monitor color accuracy have not been tested.
 
@@ -17,6 +17,7 @@ Use this matching package baseline. Another Wine or application version requires
 | OS / desktop | Fedora KDE 44 x86-64; KDE 6.7.5 Wayland; XWayland 24.1.13 |
 | Displays | Two 3840×2160 Dell monitors at 175%; Wine DPI 168 |
 | GPU / driver | NVIDIA RTX 5090; RPM Fusion 615.71.09 |
+| X11 EGL platform | NVIDIA `egl-x11` 1.0.6-1.fc44; Wine 11's default EGL backend on XWayland |
 | Wine | Fedora Wine 11.0-3.fc44 staging; matching wine-core/cms and x64 wine-opencl |
 | Packaged Direct3D | DXVK 2.7.1-6.fc44; its D3D9 is bypassed for the editor/helper with matching WineD3D |
 | DirectML / D3D12 | Official vkd3d-proton 3.0.1 x64 D3D12 pair, app-local; existing DXVK DXGI retained |
@@ -28,8 +29,10 @@ Use this matching package baseline. Another Wine or application version requires
 
 Check the existing host before building. This guide assumes working NVIDIA/OpenCL, matching Fedora Wine core/color-management/OpenCL packages, Winetricks, cabextract, fontconfig (`fc-scan`), xdg-user-dirs and the development packages listed below. The tested NVIDIA installation included `xorg-x11-drv-nvidia-cuda` and both architectures of `xorg-x11-drv-nvidia-libs`; follow your distro's driver process if those prerequisites are missing.
 
+The added presentation wait requires NVIDIA's X11 EGL implementation; it was validated with driver 615.71.09 and `egl-x11` 1.0.6. Its behavior is not guaranteed for other EGL vendors, GLX or native Wine Wayland. Keep this requirement separate from having a working NVIDIA/OpenCL device.
+
 ```bash
-rpm -q wine wine-core wine-cms wine-opencl wine-dxvk winetricks cabextract
+rpm -q wine wine-core wine-cms wine-opencl wine-dxvk winetricks cabextract egl-x11
 /usr/bin/wine --version
 nvidia-smi
 ```
@@ -83,12 +86,12 @@ export C1_APP="$WINEPREFIX/drive_c/Program Files/Capture One/Capture One"
 export C1_DOWNLOADS="$HOME/Downloads"
 export C1_FONTS_SOURCE='/path/to/your/licensed-fonts'
 export C1_DPI=168
-for C1_SOURCE in README.md valve-ulw-wine11-fedora.patch mscms-compat.c mscms.def \
+for C1_SOURCE in README.md capture-one-wine11-fedora.patch mscms-compat.c mscms.def \
   clone-private-runner.py prepare-private-wine-dlls.py LICENSE-MIT.txt LICENSE-LGPL-2.1.txt; do
   test -f "$C1_KIT/$C1_SOURCE"
 done
 sha256sum --check <<'C1_PATCH_HASH'
-2ba6afc003399c9fbc27c77593a802a0bc62c41939ac7d920707e6198a9dbf5a  valve-ulw-wine11-fedora.patch
+9413b48fdac58816e036c3299c2d8472325db628b801564cb8a87ad1eeed1681  capture-one-wine11-fedora.patch
 C1_PATCH_HASH
 test "$(rpm -q --qf '%{VERSION}-%{RELEASE}' wine-core.x86_64)" = '11.0-3.fc44'
 for C1_NEW_PATH in "$C1_BUILD" "$WINEPREFIX" "$C1_RUNNER"; do
@@ -149,36 +152,47 @@ autoreconf -f
 
 This follows the packaged `wine.spec` staging selection. Do not apply staging
 twice. Stop on a source or hash mismatch; do not substitute a similar release.
-Apply the combined, complete public patch pair:
+Apply the combined patch: both published Valve changes plus the local NVIDIA EGL wait integration:
 
 ```bash
 sha256sum --check <<'C1_SOURCE_BEFORE'
 82ff003a03691a3a25312597faa8e2715def2a05ac203faf43d7b07edcf03fd1  dlls/win32u/dce.c
 da80eb20f86d362beac08a8af59367d7b218c2719a93e14a3f2061b9ed4fea99  dlls/win32u/window.c
 ce7f660783820716ce2c145ff2cd04ce6b385169fe626e1e7b47ae675fea6c55  dlls/winex11.drv/init.c
+edcd9e9ef34d519f2649d861a2fe9d956a2dc3f969ceebf5ca9f94129040650c  dlls/winex11.drv/opengl.c
 bb800643ecea564a364869fa904930ce6d02aadfc2a0ea99874de03689cbd39d  include/wine/gdi_driver.h
 C1_SOURCE_BEFORE
 patch --batch --fuzz=0 --dry-run -p1 \
-  -i "$C1_KIT/valve-ulw-wine11-fedora.patch"
+  -i "$C1_KIT/capture-one-wine11-fedora.patch"
 patch --batch --fuzz=0 -p1 \
-  -i "$C1_KIT/valve-ulw-wine11-fedora.patch"
+  -i "$C1_KIT/capture-one-wine11-fedora.patch"
 sha256sum --check <<'C1_SOURCE_AFTER'
 cfd5469c9c38741a086df2c10430c14f7102a5524fe64355676710ea9b125d08  dlls/win32u/dce.c
 5f38c33ac9736f01c2c535773b0b546165d4bc0f3aa23e559b2d272ac746f605  dlls/win32u/window.c
 68734213a61e62f3c4a0f703e606d514473506d2c321b023f49f0f1ddda5d44c  dlls/winex11.drv/init.c
+1f75b6167c7b353fffc22b6f6b3ac4faff3aabec91234f99ac5d24840e2cf002  dlls/winex11.drv/opengl.c
 665b13ca6f4b9e62c84437ad05da10fe716b6008153fc2422716c54d246ba147  include/wine/gdi_driver.h
 C1_SOURCE_AFTER
 ```
 
-The pair comes from Valve commits
+The original pair comes from Valve commits
 [`1dc8060`](https://github.com/ValveSoftware/wine/commit/1dc8060af449d69cc4e8240732019224aab290b7)
 and
 [`d8a27b4`](https://github.com/ValveSoftware/wine/commit/d8a27b4712eaeb54f0a69e6dc98d39055a811ce2).
 Wine 11 lacks Proton's initial fullscreen/offscreen logic, so this backport
 initializes `needs_offscreen` to `FALSE` before the published alpha-mask block.
-No other rendering logic was invented for this backport. The four-file patch
-passed a zero-fuzz dry-run and reproduced the reviewed source hashes on the
-original machine.
+The additional `opengl.c` change calls `eglWaitGL` before copying an offscreen
+EGL presentation, only after a successful swap with a current context and a
+matching current draw surface. It uses NVIDIA engineer Kyle Brenneman's
+[existing Present-completion wait](https://github.com/NVIDIA/egl-x11/commit/73680e02218a031202faff79de3e7d683428d2dd),
+present in [egl-x11 1.0.6](https://github.com/NVIDIA/egl-x11/tree/v1.0.6).
+This Wine call site is a **local integration, not an accepted upstream Wine
+patch**. It relies on NVIDIA/GLVND behavior rather than a portable guarantee
+for desktop OpenGL. The wait can block for presentation completion; the
+passing embedded-WPF tests and Capture One user test do not establish safety
+or performance for every window lifecycle or another driver.
+The combined five-file patch passed a zero-fuzz dry-run and reproduced the
+reviewed build-source hashes; that does not replace a clean installation test.
 
 ### Build both Unix modules with font support
 
@@ -234,6 +248,8 @@ version, CPU architecture and compatible host libraries; the resulting
 artifacts are intended for that same host runtime.
 
 The build preserves required font/graphics features and the original exports, adding `window_surface_get` to win32u. It is not a byte-for-byte reproduction of the distribution binaries.
+
+For provenance, the tested local `winex11.so` was SHA-256 `6bd4521183e60ad41bd6d603cd5138ab0a68758abdd0e463ec8f8b25ea39881d`; `win32u.so` retained the original two-commit build. A different build environment may produce a different binary digest even with the five source hashes above matching.
 
 ### Make a frozen private Wine runner
 
@@ -533,7 +549,7 @@ print('Full-frame WPF enabled in both configurations; originals:', backup)
 PY
 ```
 
-The latest user test confirmed responsive sliders and correct image selection with this combination. It leaves the photo OpenCL and DirectML paths intact. It does **not** establish that every UI control is fixed: collapsing a tool section can remain visually stale until moving the mouse elsewhere; opening it redraws immediately. App updates may replace the runtime configuration files; inspect and reapply only this property after reviewing the new runtime, rather than replacing updated files with old copies.
+The latest user test confirmed responsive sliders and correct image selection with this combination. The NVIDIA EGL wait built in Step 2 additionally fixed tool drawers waiting for mouse movement before closing. Photo OpenCL and DirectML remain configured separately. App updates may replace the runtime configuration files; inspect and reapply only this property after reviewing the new runtime, rather than replacing updated files with old copies.
 
 ### Disable the failing optional Open With integration
 
@@ -575,7 +591,7 @@ source = r'''#!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # Adapt prefix and runner paths before use; requires the guide's app-local DLLs and registry settings.
 set -euo pipefail
-# Matching Fedora Wine 11 with the two published CodeWeavers/Valve ULW fixes.
+# Matching Fedora Wine 11 with CodeWeavers/Valve ULW fixes and the local NVIDIA EGL wait.
 export WINEPREFIX="$HOME/.local/share/capture-one/prefix-wine11"
 c1_runner="$HOME/.local/share/capture-one/runners/wine11-valve-ulw"
 export WINESERVER="$c1_runner/bin/wineserver"
@@ -584,7 +600,7 @@ export WINEDEBUG=-all
 export WINE_D3D_CONFIG=renderer=gl
 # Embedded browser rendering only; photo OpenCL is configured separately.
 export WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--disable-gpu
-# This tested patch pair targets X11, including XWayland on the Plasma desktop.
+# This configuration requires NVIDIA X11 EGL, including XWayland on the Plasma desktop.
 unset WAYLAND_DISPLAY
 if [[ -z "${DISPLAY:-}" ]]; then
     printf '%s\n' 'Capture One requires the desktop XWayland display.' >&2
@@ -705,8 +721,8 @@ Use a new test session and copied photos. Check these in one pass:
 | AI acceleration and interactive features | DirectML startup/model benchmark passed and selected device 0; an AI Subject/Background mask worked in the user test. Test other AI tools and inspect their results; broader workflows remain unvalidated |
 | Selection after previews finish | Image selection passed the hardware-WPF/full-frame user test. Recheck Library folder clicks, arrows and Select Next/Previous after previews finish and during longer use |
 | Slider responsiveness | Sliders passed the latest hardware-WPF/full-frame user test; verify live photo updates on your own images |
-| Tool-section expand/collapse | Opening redraws immediately; collapsing Levels/Curve sections may remain stale until the mouse moves elsewhere |
-| Window behavior | Test resize, maximize/restore and monitor moves; prior resize blinking remains unverified with the current setting |
+| Tool-section expand/collapse | The user confirmed that tool drawers now close immediately with the NVIDIA EGL wait; retest repeated expansion and collapse |
+| Window behavior | Test resize, maximize/restore and monitor moves; prior resize blinking remains unverified with this latest configuration |
 | Longer editing | Check stability; a successful launch is not sufficient validation |
 
 If changing an in-app preference requests a restart, follow that request. This reordered guide does not remove application-required restarts.
@@ -719,6 +735,8 @@ This procedure creates a separate prefix and private Wine runner; it does not re
 
 For an existing installation, preserve its original launcher, prefix settings and files before adapting this recipe. Restore the prior launcher/runner or restore **both** saved Unix modules together; never pair patched X11 with stock win32u. Restore only changed DLL overrides and newly added app-local DLLs/fonts from their backups. Rename `manifest.xml.disabled-for-wine` back only if the original name is free. Prefixes may hold licenses, accounts, catalogs and later edits: keep them private and do not overwrite current work with an old snapshot.
 
+If updating an existing runner that already has both CodeWeavers/Valve fixes, save its `winex11.so` before adding the EGL wait. Restoring that saved module rolls back only the wait when its matching `win32u.so` has remained unchanged. Do not substitute a stock X11 module for that backup.
+
 The handler originals are in the printed `$C1_BUILD/association-backups-*` directory. Restore only those corresponding desktop entries if rolling back launcher routing; keep them consistent with the runner you retain. Do not replace unrelated Wine handlers or change system MIME defaults.
 
 To roll back only the D3D12 addition, close every app in this prefix, move the two newly added files `$C1_APP/d3d12.dll` and `$C1_APP/d3d12core.dll` out of the application directory, and remove only the `d3d12` and `d3d12core` values from `HKCU\Software\Wine\AppDefaults\CaptureOne.exe\DllOverrides` using the same private runner. For an adapted existing installation, restore its recorded prior values instead. Leave DXGI, D3D9, WPF, OpenCL and the color overrides unchanged. The prior DirectML initialization failure may return.
@@ -727,12 +745,14 @@ To undo only full-frame WPF, close Capture One and its helper. The originals are
 
 ## Attribution and licenses
 
-The Wine patch backports two changes authored by **Paul Gofman, CodeWeavers**, published in Valve's Wine fork:
+The Wine patch includes two changes authored by **Paul Gofman, CodeWeavers**, published in Valve's Wine fork:
 
 - [1dc8060af449d69cc4e8240732019224aab290b7](https://github.com/ValveSoftware/wine/commit/1dc8060af449d69cc4e8240732019224aab290b7)
 - [d8a27b4712eaeb54f0a69e6dc98d39055a811ce2](https://github.com/ValveSoftware/wine/commit/d8a27b4712eaeb54f0a69e6dc98d39055a811ce2)
 
-It retains Wine source context and is licensed under [LGPL-2.1-or-later](LICENSE-LGPL-2.1.txt). The Wine 11 context adaptation initializes `needs_offscreen` to `FALSE` because this source lacks Proton's preceding fullscreen/offscreen block. Both matched Unix modules must be rebuilt together. This is not an official Wine or Capture One release.
+It also includes the locally written, guarded `eglWaitGL` call site described in Step 2. The underlying Present-completion implementation was authored by **Kyle Brenneman, NVIDIA**, in [commit 73680e0](https://github.com/NVIDIA/egl-x11/commit/73680e02218a031202faff79de3e7d683428d2dd); NVIDIA's implementation is provided by the installed driver/platform library and is not copied into this archive. The local Wine integration has not been accepted upstream.
+
+The patch retains Wine source context and is licensed under [LGPL-2.1-or-later](LICENSE-LGPL-2.1.txt). The Wine 11 context adaptation initializes `needs_offscreen` to `FALSE` because this source lacks Proton's preceding fullscreen/offscreen block. Both matched Unix modules must be rebuilt together. This is not an official Wine or Capture One release.
 
 `mscms-compat.c`/`mscms.def`, the two Python preparation helpers, the inline launcher and this documentation are independently written and licensed under [MIT](LICENSE-MIT.txt). The color proxy repairs Wine 11's standard-profile size query and forwards the remaining color API calls to matching Wine; it is separate from the published Wine fixes. See [Microsoft's API contract](https://learn.microsoft.com/en-us/windows/win32/api/icm/nf-icm-getstandardcolorspaceprofilew) and [Wine 11's implementation](https://github.com/wine-mirror/wine/blob/wine-11.0/dlls/mscms/profile.c).
 

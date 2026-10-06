@@ -1,21 +1,29 @@
-Subject: [BACKPORT] win32u/winex11: Preserve ULW and non-ULW GL surface presentation
-Original-author: Paul Gofman <pgofman@codeweavers.com>
+Subject: [BACKPORT + LOCAL] Capture One Wine11 layered windows and NVIDIA EGL presentation
 
-Combined backport of these two published ValveSoftware/wine commits:
+The first four files backport Paul Gofman's CodeWeavers fixes from Valve Wine:
 https://github.com/ValveSoftware/wine/commit/1dc8060af449d69cc4e8240732019224aab290b7
 https://github.com/ValveSoftware/wine/commit/d8a27b4712eaeb54f0a69e6dc98d39055a811ce2
 
-Base: Fedora wine-11.0-3.fc44.src.rpm, with its packaged wine-staging
-selection (staging/patchinstall.py DESTDIR=<source> --all -W server-Stored_ACLs).
-SRPM SHA256: c4c777b791171cdfb34cefd787c1dba4a78791ce4dddfff0e78574e442ef4045
-Per-file input/output SHA256 values: README.md build instructions
+The final opengl.c change is a local, AI-assisted integration, NOT an accepted
+upstream Wine patch. It uses NVIDIA egl-x11's existing eglWaitGL implementation
+to wait for offscreen Present completion before copying the drawable. Existing
+NVIDIA implementation and authorship:
+https://github.com/NVIDIA/egl-x11/commit/73680e02218a031202faff79de3e7d683428d2dd
 
-Context adaptation: Wine 11.0 has no Proton fullscreen/offscreen preamble.
-Initialize needs_offscreen to FALSE before the exact authored alpha-mask
-block, retaining Wine 11.0's original checks below it. Other changes are
-both published commits combined. No one-line bug60173 condition, MR10915,
-local diagnostic instrumentation, or error-suppression change is included.
+Base: Fedora wine-11.0-3.fc44.src.rpm, with its packaged wine-staging selection
+(staging/patchinstall.py DESTDIR=<source> --all -W server-Stored_ACLs).
+SRPM SHA256: c4c777b791171cdfb34cefd787c1dba4a78791ce4dddfff0e78574e442ef4045
+Per-file input/output SHA256 values: README.md build instructions.
+
+Backport context: Wine11 has no Proton fullscreen/offscreen preamble, so
+needs_offscreen starts FALSE before the published alpha-mask block.
+The local wait requires a successful offscreen EGL swap, a current context,
+and a matching current draw surface. Tested with NVIDIA615.71.09 / egl-x111.0.6.
+It relies on that implementation; it is not a portable desktop-EGL guarantee.
+The wait can block pending Present completion. See README for tests and limits.
+No pixel-readback instrumentation, GLX experiment or extra surface flush included.
 Requires matched win32u.so and winex11.so; preserves PE/syscall/server ABI.
+Wine-derived patch distributed under LGPL-2.1-or-later; see supplied license.
 
 diff --git a/dlls/win32u/dce.c b/dlls/win32u/dce.c
 --- a/dlls/win32u/dce.c
@@ -122,3 +130,28 @@ diff --git a/include/wine/gdi_driver.h b/include/wine/gdi_driver.h
  
  /* display manager interface, used to initialize display device registry data */
  
+diff --git a/dlls/winex11.drv/opengl.c b/dlls/winex11.drv/opengl.c
+--- a/dlls/winex11.drv/opengl.c
++++ b/dlls/winex11.drv/opengl.c
+@@ -1508,13 +1508,20 @@
+ static BOOL x11drv_egl_surface_swap( struct opengl_drawable *base )
+ {
+     struct gl_drawable *gl = impl_from_opengl_drawable( base );
++    EGLBoolean swapped;
+ 
+     TRACE( "%s\n", debugstr_opengl_drawable( base ) );
+ 
+-    funcs->p_eglSwapBuffers( egl->display, gl->base.surface );
++    swapped = funcs->p_eglSwapBuffers( egl->display, gl->base.surface );
+ 
+     if (InterlockedCompareExchange( &base->client->offscreen, 0, 0 ))
++    {
++        /* Wait only for the surface which was successfully swapped by the current context. */
++        if (swapped && funcs->p_eglGetCurrentContext() != EGL_NO_CONTEXT &&
++            funcs->p_eglGetCurrentSurface( EGL_DRAW ) == gl->base.surface && !funcs->p_eglWaitGL())
++            WARN( "eglWaitGL failed before offscreen presentation.\n" );
+         XFlush( gdi_display );
++    }
+ 
+     client_surface_present( base->client );
+     return TRUE;
