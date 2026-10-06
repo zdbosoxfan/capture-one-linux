@@ -2,7 +2,7 @@
 
 **Disclosure:** This setup, the custom color-profile proxy and the setup scripts were vibe coded with AI assistance. I make no claims about the code's efficacy, correctness, quality, or whether this is the proper way to solve the problem. These are reports from my own machine, not claims of reliability; the current limitations and provisional workarounds are described below.
 
-**Experimental, one-workstation result — updated 2026-10-05.** RAW editing, JPEG export and menus have worked in the user's tests. Hardware-WPF selection became one click behind after preview generation; a new catalog helped only temporarily. With the current provisional software-WPF setting, the latest user test found thumbnail selection working, but sliders remain latent/slow. Resizing has also behaved oddly and blinked; maximize/monitor behavior and sustained stability are not established. These consolidated installation steps **have not been executed end to end in a clean prefix or on a second machine**. Capture One does not officially support this Linux configuration.
+**Experimental, one-workstation result — updated 2026-10-06.** RAW editing, JPEG export and menus have worked in the user's tests. The current configuration combines hardware WPF rendering with Microsoft's full-frame rendering switch; the user confirmed that sliders and image selection now work correctly. Opening tool sections redraws immediately, but collapsing them can wait until the mouse moves elsewhere. Resizing previously behaved oddly and blinked; resize, maximize/monitor behavior and sustained stability have not been validated with the current setting. These consolidated installation steps **have not been executed end to end in a clean prefix or on a second machine**. Capture One does not officially support this Linux configuration.
 
 **AI status and other limits:** OpenCL photo processing initializes. With the official vkd3d-proton 3.0.1 D3D12 pair, Capture One's DirectML model benchmark passed and startup selected GPU device 0 for AI acceleration. Separate FP32/FP16 ONNX tests also passed with CPU fallback disabled. An AI Subject/Background mask worked in the user test; other AI workflows and sustained AI performance remain unvalidated. The optional Open With integration is disabled. Tethering and monitor color accuracy have not been tested.
 
@@ -311,7 +311,7 @@ python3 "$C1_KIT/prepare-private-wine-dlls.py" "$C1_RUNNER" "$C1_FILES"
 
 ### Prepare the official D3D12 pair for DirectML
 
-The tested DXVK DXGI and Wine builtin D3D12 combination failed to initialize DirectML. The official vkd3d-proton pair corrected device initialization, passed isolated FP32/FP16 GPU computation, and passed Capture One's startup model benchmark. [Upstream documents using both native D3D12 DLLs with DXVK DXGI](https://github.com/HansKristian-Work/vkd3d-proton/blob/v3.0.1/README.md#using-vkd3d-proton). This step retains the existing DXGI, WineD3D9, software WPF and photo OpenCL settings.
+The tested DXVK DXGI and Wine builtin D3D12 combination failed to initialize DirectML. The official vkd3d-proton pair corrected device initialization, passed isolated FP32/FP16 GPU computation, and passed Capture One's startup model benchmark. [Upstream documents using both native D3D12 DLLs with DXVK DXGI](https://github.com/HansKristian-Work/vkd3d-proton/blob/v3.0.1/README.md#using-vkd3d-proton). This step retains the existing DXGI and WineD3D9; hardware WPF with full-frame rendering and photo OpenCL are configured below.
 
 Verify the exact [3.0.1 release](https://github.com/HansKristian-Work/vkd3d-proton/releases/tag/v3.0.1), then extract only its two x64 DLLs into the build output. The archive digest was checked against the release asset's published SHA-256. These binaries are downloaded separately and are not included in this source kit. No upstream installation script is run.
 
@@ -470,7 +470,7 @@ PY
 
 ### Prefix and application settings
 
-Apply the current local configuration together: Windows 11 for the prefix, Windows 8 only for the embedded browser, editor-scoped color and D3D12 overrides, WineD3D9 for both editor and helper, software WPF, OpenCL photo processing and the selected DPI. The D3D12 overrides affect only `CaptureOne.exe`; the existing DXGI configuration is retained.
+Apply the current local configuration together: Windows 11 for the prefix, Windows 8 only for the embedded browser, editor-scoped color and D3D12 overrides, WineD3D9 for both editor and helper, hardware WPF, OpenCL photo processing and the selected DPI. Then merge the full-frame WPF switch into both runtime configurations below, before any application launch. The D3D12 overrides affect only `CaptureOne.exe`; the existing DXGI configuration is retained.
 
 ```bash
 /usr/bin/wine winecfg -v win11
@@ -485,14 +485,55 @@ for C1_EXE in CaptureOne.exe P1.WebView.exe; do
     /v d3d9 /t REG_SZ /d native /f
 done
 /usr/bin/wine reg add 'HKCU\Software\Microsoft\Avalon.Graphics' \
-  /v DisableHWAcceleration /t REG_DWORD /d 1 /f
+  /v DisableHWAcceleration /t REG_DWORD /d 0 /f
 /usr/bin/wine reg add 'HKCU\Software\Phase One\Capture One' \
   /v UseOpenCL /t REG_DWORD /d 1 /f
 /usr/bin/wine reg add 'HKCU\Control Panel\Desktop' \
   /v LogPixels /t REG_DWORD /d "$C1_DPI" /f
 ```
 
-The WPF software-rendering setting is a provisional workaround for selection becoming one click late after previews finish. The latest user test found thumbnail selection working with photo OpenCL still active, but sliders feel slow/latent. This is not a confirmed universal fix. [Microsoft documents this diagnostic](https://learn.microsoft.com/en-us/dotnet/desktop/wpf/graphics-multimedia/graphics-rendering-registry-settings). To undo this comparison later, close Capture One and restore only `DisableHWAcceleration` to its prior DWORD value (0 in the tested setup).
+Merge Microsoft's existing `Switch.System.Windows.Media.MediaContext.DisableDirtyRectangles` property into **both** `CaptureOne.runtimeconfig.json` and `P1.WebView.runtimeconfig.json`. It requests full-frame WPF rendering and presentation. The installed .NET Desktop Runtime 8.0.31 contains this switch. [Microsoft's WPF change](https://github.com/dotnet/wpf/pull/5837) and [issue discussion](https://github.com/dotnet/wpf/issues/5441) document its purpose. The following block backs up both original files before writing, preserves the remaining JSON settings, and refuses an existing backup or property:
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+import json, os, shutil
+app = Path(os.environ['C1_APP'])
+prefix = Path(os.environ['WINEPREFIX'])
+backup = Path(os.environ['C1_BUILD']) / 'runtimeconfig-before-full-frame'
+switch = 'Switch.System.Windows.Media.MediaContext.DisableDirtyRectangles'
+names = ['CaptureOne.runtimeconfig.json', 'P1.WebView.runtimeconfig.json']
+assert not backup.exists() and not backup.is_symlink(), 'Preserve existing runtimeconfig backups.'
+runtime = prefix / 'drive_c/Program Files/dotnet/shared/Microsoft.WindowsDesktop.App/8.0.31/PresentationCore.dll'
+assert switch.encode('utf-16le') in runtime.read_bytes(), 'Required WPF switch missing from the expected runtime.'
+plans = []
+for name in names:
+    path = app / name
+    temp = path.with_name(name + '.full-frame-new')
+    assert path.is_file() and not path.is_symlink()
+    assert not temp.exists() and not temp.is_symlink()
+    original = path.read_bytes()
+    data = json.loads(original.decode('utf-8-sig'))
+    properties = data['runtimeOptions'].setdefault('configProperties', {})
+    assert isinstance(properties, dict) and switch not in properties, 'Review existing switch: ' + name
+    properties[switch] = True
+    plans.append((path, temp, original, (json.dumps(data, indent=2) + '\n').encode('utf-8')))
+backup.mkdir(mode=0o700)
+for path, temp, original, updated in plans:
+    assert path.read_bytes() == original, 'Configuration changed during preparation.'
+    shutil.copy2(path, backup / path.name)
+for path, temp, original, updated in plans:
+    assert path.read_bytes() == original, 'Configuration changed during preparation.'
+    with temp.open('xb') as f:
+        f.write(updated)
+    temp.chmod(path.stat().st_mode & 0o777)
+    os.replace(temp, path)
+    assert json.loads(path.read_text())['runtimeOptions']['configProperties'][switch] is True
+print('Full-frame WPF enabled in both configurations; originals:', backup)
+PY
+```
+
+The latest user test confirmed responsive sliders and correct image selection with this combination. It leaves the photo OpenCL and DirectML paths intact. It does **not** establish that every UI control is fixed: collapsing a tool section can remain visually stale until moving the mouse elsewhere; opening it redraws immediately. App updates may replace the runtime configuration files; inspect and reapply only this property after reviewing the new runtime, rather than replacing updated files with old copies.
 
 ### Disable the failing optional Open With integration
 
@@ -662,9 +703,10 @@ Use a new test session and copied photos. Check these in one pass:
 | JPEG export | Export the edited RAW and inspect the resulting JPEG |
 | Hardware Acceleration preferences | Select/confirm Auto and let kernel setup finish; OpenCL is separate from Windows AI features |
 | AI acceleration and interactive features | DirectML startup/model benchmark passed and selected device 0; an AI Subject/Background mask worked in the user test. Test other AI tools and inspect their results; broader workflows remain unvalidated |
-| Selection after previews finish | Thumbnail selection passed the latest software-WPF test. Recheck Library folder clicks, arrows and Select Next/Previous after previews finish and during longer use; a new catalog alone was only a temporary improvement |
-| Slider responsiveness | Sliders remain slow/latent in the latest software-WPF test; performance is unresolved |
-| Window behavior | Test resize, maximize/restore and monitor moves; resize blinking is a known unresolved issue |
+| Selection after previews finish | Image selection passed the hardware-WPF/full-frame user test. Recheck Library folder clicks, arrows and Select Next/Previous after previews finish and during longer use |
+| Slider responsiveness | Sliders passed the latest hardware-WPF/full-frame user test; verify live photo updates on your own images |
+| Tool-section expand/collapse | Opening redraws immediately; collapsing Levels/Curve sections may remain stale until the mouse moves elsewhere |
+| Window behavior | Test resize, maximize/restore and monitor moves; prior resize blinking remains unverified with the current setting |
 | Longer editing | Check stability; a successful launch is not sufficient validation |
 
 If changing an in-app preference requests a restart, follow that request. This reordered guide does not remove application-required restarts.
@@ -680,6 +722,8 @@ For an existing installation, preserve its original launcher, prefix settings an
 The handler originals are in the printed `$C1_BUILD/association-backups-*` directory. Restore only those corresponding desktop entries if rolling back launcher routing; keep them consistent with the runner you retain. Do not replace unrelated Wine handlers or change system MIME defaults.
 
 To roll back only the D3D12 addition, close every app in this prefix, move the two newly added files `$C1_APP/d3d12.dll` and `$C1_APP/d3d12core.dll` out of the application directory, and remove only the `d3d12` and `d3d12core` values from `HKCU\Software\Wine\AppDefaults\CaptureOne.exe\DllOverrides` using the same private runner. For an adapted existing installation, restore its recorded prior values instead. Leave DXGI, D3D9, WPF, OpenCL and the color overrides unchanged. The prior DirectML initialization failure may return.
+
+To undo only full-frame WPF, close Capture One and its helper. The originals are in `$C1_BUILD/runtimeconfig-before-full-frame`. Restore those two files only if they have not acquired other edits or been replaced by an app update; otherwise remove only the added `Switch.System.Windows.Media.MediaContext.DisableDirtyRectangles` property from each current JSON file. Restoring the earlier software-WPF fallback additionally means setting `HKCU\Software\Microsoft\Avalon.Graphics\DisableHWAcceleration` to DWORD `1` using the same private runner; it previously avoided the selection lag but made sliders slow. If adapting an existing setup, restore its recorded prior registry value instead. These changes do not require replacing graphics DLLs or changing OpenCL/DirectML.
 
 ## Attribution and licenses
 
